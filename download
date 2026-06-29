@@ -1,0 +1,202 @@
+-- ============================================================
+-- AXIAL MEDIÇÕES - SCHEMA DO BANCO (Supabase / PostgreSQL)
+-- ============================================================
+-- Execute este arquivo INTEIRO no SQL Editor do Supabase.
+-- Ordem: 01_schema.sql  ->  02_rls.sql  ->  03_seed.sql (opcional)
+-- ============================================================
+
+-- ---------- EXTENSÕES ----------
+create extension if not exists "pgcrypto";
+
+-- ============================================================
+-- 1. PERFIS DE USUÁRIO (liga ao auth.users do Supabase)
+-- ============================================================
+-- Cada usuário do Supabase Auth tem 1 perfil aqui.
+-- role: 'admin' (vê tudo, cria operadores e libera obras)
+--       'operador' (só acessa as obras liberadas)
+create table public.perfis (
+  id          uuid primary key references auth.users(id) on delete cascade,
+  nome        text not null,
+  email       text not null,
+  role        text not null default 'operador' check (role in ('admin','operador')),
+  ativo       boolean not null default true,
+  criado_em   timestamptz not null default now()
+);
+
+-- ============================================================
+-- 2. OBRAS / CENTROS DE CUSTO
+-- ============================================================
+create table public.obras (
+  id            uuid primary key default gen_random_uuid(),
+  nome          text not null,
+  centro_custo  text,                       -- campo "CENTRO DE CUSTO" (pasta suspensa)
+  cliente       text not null default 'CONSTRUTORA AXIAL LTDA',
+  ativa         boolean not null default true,
+  criado_em     timestamptz not null default now()
+);
+
+-- ============================================================
+-- 3. LIBERAÇÃO DE OBRAS POR OPERADOR (acesso)
+-- ============================================================
+-- O admin insere/remove linhas aqui para liberar uma obra a um operador.
+-- Sem linha = operador NÃO acessa aquela obra.
+create table public.acesso_obra (
+  id          uuid primary key default gen_random_uuid(),
+  user_id     uuid not null references public.perfis(id) on delete cascade,
+  obra_id     uuid not null references public.obras(id) on delete cascade,
+  liberado_em timestamptz not null default now(),
+  unique (user_id, obra_id)
+);
+
+-- ============================================================
+-- 4. FORNECEDORES (cadastro único - pasta suspensa na medição)
+-- ============================================================
+create table public.fornecedores (
+  id           uuid primary key default gen_random_uuid(),
+  nome         text not null,               -- CONTRATADA (ex: SUSTEINER)
+  cnpj         text,
+  objeto       text,                        -- campo OBJETIVO (ex: LOCAÇÃO DE EQUIPAMENTOS)
+  ativo        boolean not null default true,
+  criado_em    timestamptz not null default now()
+);
+
+-- ============================================================
+-- 5. UNIDADES (pasta suspensa do campo UN)
+-- ============================================================
+create table public.unidades (
+  id     uuid primary key default gen_random_uuid(),
+  sigla  text not null unique               -- M, VB, UN, M2, M3, KG, etc.
+);
+
+-- ============================================================
+-- 6. MEDIÇÕES (cabeçalho - 1 por fornecedor/obra/período)
+-- ============================================================
+-- O "ACUMULADO" é calculado encadeando medições pela medicao_anterior_id.
+create table public.medicoes (
+  id                   uuid primary key default gen_random_uuid(),
+  obra_id              uuid not null references public.obras(id),
+  fornecedor_id        uuid not null references public.fornecedores(id),
+  rm_numero            integer not null,            -- RM nº (editável)
+  periodo_inicio       date not null,               -- PERÍODO (editável)
+  periodo_fim          date not null,
+  mes_referencia       date not null,               -- MÊS DE REFERÊNCIA
+  sub_contrato         text,                         -- SUB-CONTRATO Nº
+  objeto               text,                         -- OBJETO (vem do fornecedor mas editável)
+  observacoes          text,
+  -- retenção e desconto a nível de medição (campos editáveis do rodapé)
+  retencao             numeric(14,2) not null default 0,
+  desconto             numeric(14,2) not null default 0,
+  -- encadeamento para somatório de períodos
+  medicao_anterior_id  uuid references public.medicoes(id),
+  status               text not null default 'rascunho'
+                       check (status in ('rascunho','finalizada')),
+  criado_por           uuid not null references public.perfis(id),
+  criado_em            timestamptz not null default now(),
+  atualizado_em        timestamptz not null default now(),
+  unique (obra_id, fornecedor_id, rm_numero)
+);
+
+-- ============================================================
+-- 7. ITENS DA MEDIÇÃO (linhas: 1.1.1, 1.1.2, ...)
+-- ============================================================
+create table public.medicao_itens (
+  id               uuid primary key default gen_random_uuid(),
+  medicao_id       uuid not null references public.medicoes(id) on delete cascade,
+  ordem            integer not null default 0,    -- ordem cronológica (ITEM)
+  item_codigo      text,                           -- "1.1.1" (gerado/editável)
+  descricao        text not null,                  -- DESCRIÇÃO (maiúsculas - app força)
+  dimensoes        text,                           -- DIMENSÕES (editável)
+  unidade          text,                           -- UN (pasta suspensa)
+  qtd_total        numeric(14,4) not null default 0,  -- QTD TOTAL contratada
+  preco_unitario   numeric(14,4) not null default 0,  -- Preço Unitário (R$)
+  -- quantidade medida NESTE período (NO PERÍODO -> Quant.)
+  qtd_periodo      numeric(14,4) not null default 0,
+  -- "ANTES MEDIDO" é puxado do item correspondente da medição anterior.
+  criado_em        timestamptz not null default now()
+);
+
+create index idx_itens_medicao on public.medicao_itens(medicao_id);
+create index idx_acesso_user   on public.acesso_obra(user_id);
+create index idx_medicoes_obra on public.medicoes(obra_id);
+
+-- ============================================================
+-- 8. CÁLCULOS (VIEW) - faz todas as fórmulas da planilha no banco
+-- ============================================================
+-- Espelha as fórmulas do Excel:
+--   preco_total      = qtd_total * preco_unitario
+--   valor_periodo    = qtd_periodo * preco_total            (W = V * S, conforme Excel)
+--   qtd_acumulada    = qtd_periodo + qtd_antes
+--   valor_acumulado  = valor_periodo + valor_antes
+create or replace view public.v_medicao_itens as
+with antes as (
+  -- liga cada item ao item de mesmo código na medição anterior
+  select
+    i.id as item_id,
+    coalesce(pi.qtd_periodo, 0)                                as qtd_antes,
+    coalesce(pi.qtd_periodo * (pi.qtd_total*pi.preco_unitario), 0) as valor_antes
+  from public.medicao_itens i
+  join public.medicoes m on m.id = i.medicao_id
+  left join public.medicoes pm on pm.id = m.medicao_anterior_id
+  left join public.medicao_itens pi
+         on pi.medicao_id = pm.id and pi.item_codigo = i.item_codigo
+)
+select
+  i.*,
+  round(i.qtd_total * i.preco_unitario, 2)                       as preco_total,
+  round(i.qtd_periodo * (i.qtd_total * i.preco_unitario), 2)     as valor_periodo,
+  a.qtd_antes,
+  a.valor_antes,
+  (i.qtd_periodo + a.qtd_antes)                                  as qtd_acumulada,
+  round(i.qtd_periodo * (i.qtd_total*i.preco_unitario) + a.valor_antes, 2) as valor_acumulado
+from public.medicao_itens i
+join antes a on a.item_id = i.id;
+
+-- Totais por medição (rodapé: TOTAL NO PERÍODO, LÍQUIDO A PAGAR, etc.)
+create or replace view public.v_medicao_totais as
+select
+  m.id as medicao_id,
+  coalesce(sum(v.valor_periodo),0)                              as total_periodo_bruto,
+  coalesce(sum(v.valor_antes),0)                                as total_anterior,
+  coalesce(sum(v.valor_acumulado),0)                            as total_acumulado,
+  m.desconto,
+  m.retencao,
+  coalesce(sum(v.valor_periodo),0) - m.desconto - m.retencao    as valor_liquido
+from public.medicoes m
+left join public.v_medicao_itens v on v.medicao_id = m.id
+group by m.id, m.desconto, m.retencao;
+
+-- ============================================================
+-- 9. TRIGGER: cria perfil automático quando admin cria usuário
+-- ============================================================
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+begin
+  insert into public.perfis (id, nome, email, role)
+  values (
+    new.id,
+    coalesce(new.raw_user_meta_data->>'nome', new.email),
+    new.email,
+    coalesce(new.raw_user_meta_data->>'role', 'operador')
+  )
+  on conflict (id) do nothing;
+  return new;
+end;
+$$;
+
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute function public.handle_new_user();
+
+-- atualiza atualizado_em
+create or replace function public.touch_updated_at()
+returns trigger language plpgsql as $$
+begin new.atualizado_em = now(); return new; end; $$;
+
+drop trigger if exists trg_touch_medicoes on public.medicoes;
+create trigger trg_touch_medicoes
+  before update on public.medicoes
+  for each row execute function public.touch_updated_at();

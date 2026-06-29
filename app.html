@@ -1,0 +1,37 @@
+-- ============================================================
+-- AXIAL MEDIÇÕES - DADOS INICIAIS (opcional)
+-- ============================================================
+-- Execute DEPOIS de criar seu primeiro usuário admin.
+-- ============================================================
+
+-- Unidades padrão (pasta suspensa do campo UN)
+insert into public.unidades (sigla) values
+  ('UN'), ('M'), ('M2'), ('M3'), ('ML'), ('KG'), ('T'),
+  ('VB'), ('H'), ('DIA'), ('MÊS'), ('SC'), ('PÇ'), ('CJ'), ('L')
+on conflict (sigla) do nothing;
+
+-- Exemplo de fornecedor (baseado na planilha modelo)
+insert into public.fornecedores (nome, objeto) values
+  ('SUSTEINER', 'LOCAÇÃO DE EQUIPAMENTOS')
+on conflict do nothing;
+
+-- Obras (pré-cadastradas conforme pasta de Contratos da Engenharia)
+insert into public.obras (nome, centro_custo) values
+  ('ITABORAÍ - SECID',              '01'),
+  ('IGUÁ SANEAMENTO',               '02'),
+  ('CONSÓRCIO IEA IMBASSAÍ',        '03'),
+  ('CAMPO GRANDE - PREF. DO RIO',   '04'),
+  ('MARIO LARUBIA - ITERJ',         '05'),
+  ('ITACURUÇA - SEIOP',             '06'),
+  ('BARRA DO PIRAÍ - SEIOP',        '07'),
+  ('BUZIOS - CITY - SECID',         '08'),
+  ('SANTA CRUZ - ITERJ',            '09'),
+  ('MESQUITA - SECID',              '10'),
+  ('AREAL - SECID',                 '11')
+on conflict do nothing;
+
+-- ============================================================
+-- COMO TORNAR UM USUÁRIO ADMIN (rode após criar o login):
+-- ============================================================
+-- update public.perfis set role = 'admin'
+-- where email = 'seu-email@exemplo.com';
