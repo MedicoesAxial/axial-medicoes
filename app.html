@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Axial Medições</title>
+  <link rel="stylesheet" href="css/estilo.css">
+</head>
+<body>
+  <div class="topbar">
+    <img src="assets/logo.png" alt="Axial">
+    <div class="user">
+      <span id="userNome"></span>
+      <span id="userBadge" class="badge"></span>
+      <button class="btn btn-secundario btn-sm" id="btnSair">Sair</button>
+    </div>
+  </div>
+
+  <div class="tabs" id="tabs">
+    <div class="tab ativo" data-view="medicoes">Medições</div>
+    <div class="tab admin-only" data-view="obras">Obras</div>
+    <div class="tab admin-only" data-view="fornecedores">Fornecedores</div>
+    <div class="tab admin-only" data-view="operadores">Operadores</div>
+    <div class="tab admin-only" data-view="acessos">Liberar Obras</div>
+  </div>
+
+  <div class="container">
+    <div id="view-medicoes"></div>
+    <div id="view-obras" class="hidden"></div>
+    <div id="view-fornecedores" class="hidden"></div>
+    <div id="view-operadores" class="hidden"></div>
+    <div id="view-acessos" class="hidden"></div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="js/config.js"></script>
+  <script src="js/app.js"></script>
+  <script src="js/medicoes.js"></script>
+  <script src="js/admin.js"></script>
+</body>
+</html>
