@@ -161,6 +161,7 @@ small.dica{color:#99a;font-size:11px;display:block;margin-top:3px}
     <div class="tab admin-only" data-view="operadores">Operadores</div>
     <div class="tab admin-only" data-view="acessos">Liberar Obras</div>
     <div class="tab admin-only" data-view="historico">Histórico</div>
+    <div class="tab" data-view="perfil">Meu Perfil</div>
   </div>
   <div class="container">
     <div id="view-medicoes"></div>
@@ -170,6 +171,7 @@ small.dica{color:#99a;font-size:11px;display:block;margin-top:3px}
     <div id="view-operadores" class="hidden"></div>
     <div id="view-acessos" class="hidden"></div>
     <div id="view-historico" class="hidden"></div>
+    <div id="view-perfil" class="hidden"></div>
   </div>
 </div>
 
@@ -268,7 +270,7 @@ function toast(msg, tipo='info'){
       $$('.tab').forEach(t=>t.classList.remove('ativo'));
       tab.classList.add('ativo');
       const v = tab.dataset.view;
-      ['medicoes','obras','fornecedores','contratos','operadores','acessos','historico'].forEach(name=>{
+      ['medicoes','obras','fornecedores','contratos','operadores','acessos','historico','perfil'].forEach(name=>{
         $('#view-'+name).classList.toggle('hidden', name!==v);
       });
       renderView(v);
@@ -292,6 +294,7 @@ function renderView(v){
   if(v==='operadores')   renderOperadores();
   if(v==='acessos')      renderAcessos();
   if(v==='historico')    renderHistorico();
+  if(v==='perfil')       renderPerfil();
 }
 
 </script>
@@ -751,7 +754,7 @@ async function renderContratos(){
       <h2>Contratos <button class="btn btn-primary btn-sm" onclick="editContrato()">+ Novo contrato</button></h2>
       <div class="msg msg-info">Um contrato liga um fornecedor a uma obra. O mesmo fornecedor pode ter vários contratos, um por obra.</div>
       <div id="formContrato"></div>
-      <table><thead><tr><th>Obra</th><th>Fornecedor</th><th>Nº contrato</th><th>Objeto</th><th>Status</th><th></th></tr></thead>
+      <table><thead><tr><th>Obra</th><th>Fornecedor</th><th>No contrato</th><th>Objeto</th><th>Status</th><th></th></tr></thead>
         <tbody>${linhas||'<tr><td colspan="6" class="lista-vazia">Nenhum contrato.</td></tr>'}</tbody></table>
     </div>`;
 }
@@ -895,6 +898,53 @@ async function renderHistorico(){
           <tbody>${linhas||'<tr><td colspan="5" class="lista-vazia">Sem movimentações ainda.</td></tr>'}</tbody></table>
       </div>
     </div>`;
+}
+
+// ---------- MEU PERFIL (qualquer usuario) ----------
+async function renderPerfil(){
+  const el = document.getElementById('view-perfil');
+  el.innerHTML = `
+    <div class="card" style="max-width:560px">
+      <h2>Meu perfil</h2>
+      <div id="msgPerfil"></div>
+      <div class="grid" style="gap:14px">
+        <div><label>Nome de exibição</label><input id="pf_nome" value="${esc(PERFIL.nome||'')}"></div>
+        <div><label>E-mail (somente leitura)</label><input value="${esc(PERFIL.email||'')}" disabled></div>
+        <div><button class="btn btn-primary btn-sm" onclick="salvarNomePerfil()">Salvar nome</button></div>
+      </div>
+      <hr style="margin:22px 0;border:none;border-top:1px solid var(--cinza-borda)">
+      <h2>Trocar senha</h2>
+      <div class="grid" style="gap:14px">
+        <div><label>Nova senha</label><input type="password" id="pf_senha1" placeholder="mín. 6 caracteres"></div>
+        <div><label>Confirmar nova senha</label><input type="password" id="pf_senha2"></div>
+        <div><button class="btn btn-primary btn-sm" onclick="trocarSenha()">Alterar senha</button></div>
+      </div>
+    </div>`;
+}
+
+async function salvarNomePerfil(){
+  const nome = document.getElementById('pf_nome').value.trim();
+  if(!nome){ toast('Informe o nome.','erro'); return; }
+  const { error } = await supabaseClient.from('perfis').update({nome}).eq('id', PERFIL.id);
+  if(error){ toast(error.message,'erro'); return; }
+  PERFIL.nome = nome;
+  document.getElementById('userNome').textContent = nome;
+  registrarHistorico('alterou próprio nome','perfil',PERFIL.id);
+  document.getElementById('msgPerfil').innerHTML = '<div class="msg msg-ok">Nome atualizado.</div>';
+}
+
+async function trocarSenha(){
+  const s1 = document.getElementById('pf_senha1').value;
+  const s2 = document.getElementById('pf_senha2').value;
+  const msg = document.getElementById('msgPerfil');
+  if(s1.length < 6){ msg.innerHTML = '<div class="msg msg-erro">A senha deve ter no mínimo 6 caracteres.</div>'; return; }
+  if(s1 !== s2){ msg.innerHTML = '<div class="msg msg-erro">As senhas não coincidem.</div>'; return; }
+  const { error } = await supabaseClient.auth.updateUser({ password: s1 });
+  if(error){ msg.innerHTML = `<div class="msg msg-erro">${esc(error.message)}</div>`; return; }
+  registrarHistorico('alterou própria senha','perfil',PERFIL.id);
+  msg.innerHTML = '<div class="msg msg-ok">Senha alterada com sucesso.</div>';
+  document.getElementById('pf_senha1').value='';
+  document.getElementById('pf_senha2').value='';
 }
 
 </script>
