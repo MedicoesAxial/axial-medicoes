@@ -479,7 +479,7 @@ let ITENS_ATUAIS = [];
 async function abrirMedicao(id){
   await carregarRefs();
   const { data:m } = await supabaseClient.from('medicoes')
-    .select('*, obras(nome,centro_custo), fornecedores(nome,logo_url)').eq('id', id).single();
+    .select('*, obras(nome,centro_custo), fornecedores(nome,logo_url), contratos(valor_contrato,numero)').eq('id', id).single();
   MEDICAO_ATUAL = m;
 
   const { data:itens } = await supabaseClient.from('v_medicao_itens')
@@ -521,8 +521,8 @@ function desenharMedicao(){
     <div class="card">
       <h2>RM ${m.rm_numero} - ${esc(m.fornecedores.nome)}
         <span style="display:flex;gap:8px">
-          <button class="btn btn-secundario btn-sm" onclick="exportarExcel()">Excel</button>
-          <button class="btn btn-secundario btn-sm" onclick="exportarPDF()">PDF</button>
+          <button class="btn btn-secundario btn-sm" onclick="exportarExcel()">Excel (dados)</button>
+          <button class="btn btn-secundario btn-sm" onclick="imprimirMedicao()">PDF / Imprimir</button>
           <button class="btn btn-secundario btn-sm" onclick="renderMedicoes()">Voltar à lista</button>
         </span>
       </h2>
@@ -745,6 +745,7 @@ async function renderContratos(){
       <td>${esc(c.obras?.nome||'')}</td>
       <td>${esc(c.fornecedores?.nome||'')}</td>
       <td>${esc(c.numero||'-')}</td>
+      <td class="num">${c.valor_contrato?brl(c.valor_contrato):'-'}</td>
       <td>${esc(c.objeto||'-')}</td>
       <td>${c.ativo?'Ativo':'Inativo'}</td>
       <td class="acoes"><button class="btn btn-secundario btn-sm" onclick="editContrato('${c.id}')">Editar</button></td>
@@ -754,7 +755,7 @@ async function renderContratos(){
       <h2>Contratos <button class="btn btn-primary btn-sm" onclick="editContrato()">+ Novo contrato</button></h2>
       <div class="msg msg-info">Um contrato liga um fornecedor a uma obra. O mesmo fornecedor pode ter vários contratos, um por obra.</div>
       <div id="formContrato"></div>
-      <table><thead><tr><th>Obra</th><th>Fornecedor</th><th>No contrato</th><th>Objeto</th><th>Status</th><th></th></tr></thead>
+      <table><thead><tr><th>Obra</th><th>Fornecedor</th><th>No contrato</th><th class="num">Valor</th><th>Objeto</th><th>Status</th><th></th></tr></thead>
         <tbody>${linhas||'<tr><td colspan="6" class="lista-vazia">Nenhum contrato.</td></tr>'}</tbody></table>
     </div>`;
 }
@@ -773,6 +774,7 @@ async function editContrato(id=''){
       <div><label>Obra</label><select id="ct_obra">${optsObra}</select></div>
       <div><label>Fornecedor</label><select id="ct_forn">${optsForn}</select></div>
       <div><label>Nº do contrato / sub-contrato</label><input id="ct_num" value="${esc(c.numero||'')}"></div>
+      <div><label>Valor do contrato (R$)</label><input type="number" step="0.01" id="ct_valor" value="${c.valor_contrato||0}"></div>
       <div><label>Status</label><select id="ct_ativo"><option value="true" ${c.ativo?'selected':''}>Ativo</option><option value="false" ${!c.ativo?'selected':''}>Inativo</option></select></div>
       <div style="grid-column:1/-1"><label>Objeto</label><input id="ct_obj" value="${esc(c.objeto||'')}" placeholder="LOCAÇÃO DE EQUIPAMENTOS"></div>
       <div style="grid-column:1/-1"><button class="btn btn-primary btn-sm" onclick="salvarContrato('${id}')">Salvar</button>
@@ -787,6 +789,7 @@ async function salvarContrato(id){
   const reg = {
     obra_id:$('#ct_obra').value, fornecedor_id:$('#ct_forn').value,
     numero:$('#ct_num').value.trim()||null, objeto:$('#ct_obj').value.trim().toUpperCase()||null,
+    valor_contrato: parseFloat($('#ct_valor').value)||0,
     ativo:$('#ct_ativo').value==='true'
   };
   if(!reg.obra_id || !reg.fornecedor_id){ toast('Escolha obra e fornecedor.','erro'); return; }
@@ -975,7 +978,7 @@ function _nomeArquivo(ext){
 // EXCEL
 // ============================================================
 function exportarExcel(){
-  if(!MEDICAO_ATUAL){ toast('Abra uma medicao primeiro.','erro'); return; }
+  if(!MEDICAO_ATUAL){ toast('Abra uma medição primeiro.','erro'); return; }
   const m = MEDICAO_ATUAL;
   const t = _totaisMedicao();
 
@@ -1029,7 +1032,7 @@ function exportarExcel(){
 // PDF
 // ============================================================
 function exportarPDF(){
-  if(!MEDICAO_ATUAL){ toast('Abra uma medicao primeiro.','erro'); return; }
+  if(!MEDICAO_ATUAL){ toast('Abra uma medição primeiro.','erro'); return; }
   const m = MEDICAO_ATUAL;
   const t = _totaisMedicao();
   const { jsPDF } = window.jspdf;
@@ -1127,6 +1130,167 @@ function exportarPDF(){
   doc.line(W-110, ay, W-30, ay); doc.text('Contratada', W-80, ay+5);
 
   doc.save(_nomeArquivo('pdf'));
+}
+
+</script>
+<script>
+// ============================================================
+// IMPRESSAO FIEL AO MODELO (PDF via "Salvar como PDF" do navegador)
+// ============================================================
+function imprimirMedicao(){
+  if(!MEDICAO_ATUAL){ toast('Abra uma medição primeiro.','erro'); return; }
+  const m = MEDICAO_ATUAL;
+  const itens = ITENS_ATUAIS;
+
+  const totPeriodo  = itens.reduce((s,i)=>s+Number(i.valor_periodo),0);
+  const totAnterior = itens.reduce((s,i)=>s+Number(i.valor_antes),0);
+  const totAcum     = itens.reduce((s,i)=>s+Number(i.valor_acumulado),0);
+  // valor contratado vem do CONTRATO; se ausente, cai para a soma dos precos totais
+  const valorContrato = Number(m.contratos?.valor_contrato || 0)
+        || itens.reduce((s,i)=>s+Number(i.preco_total),0);
+  const desconto = Number(m.desconto||0), retencao = Number(m.retencao||0);
+  const saldo = valorContrato - totAcum;
+  const liquido = totPeriodo - desconto - retencao;
+  const pct = (v)=> valorContrato? (v/valorContrato*100):0;
+
+  const logoForn = m.fornecedores?.logo_url || '';
+  const mesRef = (()=>{ const d=m.mes_referencia; if(!d) return '';
+    const M=['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+    const [a,mm]=d.split('-'); return M[parseInt(mm)-1]+'/'+a; })();
+
+  let linhasHTML='';
+  itens.forEach(it=>{
+    linhasHTML += `<tr>
+      <td class="c">${esc(it.item_codigo||'')}</td>
+      <td class="l">${esc(it.descricao||'')}</td>
+      <td class="c">${esc(it.unidade||'')}</td>
+      <td class="r">${it.qtd_total!=null?num(it.qtd_total):''}</td>
+      <td class="r">${it.preco_unitario!=null?brl(it.preco_unitario):''}</td>
+      <td class="r">${it.preco_total!=null?brl(it.preco_total):''}</td>
+      <td class="r">${Number(it.qtd_antes)?num(it.qtd_antes):'-'}</td>
+      <td class="r">${brl(it.valor_antes)}</td>
+      <td class="r">${Number(it.qtd_periodo)?num(it.qtd_periodo):'-'}</td>
+      <td class="r">${brl(it.valor_periodo)}</td>
+      <td class="r">${Number(it.qtd_acumulada)?num(it.qtd_acumulada):'-'}</td>
+      <td class="r">${brl(it.valor_acumulado)}</td>
+    </tr>`;
+  });
+
+  const html = `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8">
+<title>Medição RM ${m.rm_numero} - ${esc(m.fornecedores?.nome||'')}</title>
+<style>
+  @page { size: A4 landscape; margin: 6mm; }
+  *{ box-sizing:border-box; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  body{ margin:0; font-family:Arial,Helvetica,sans-serif; color:#000; }
+  table{ border-collapse:collapse; width:100%; table-layout:fixed; }
+  td,th{ border:1px solid #000; padding:2px 3px; font-size:8.5px; word-wrap:break-word; }
+  .azul{ background:#8DB4E2 !important; }
+  .cinza{ background:#F2F2F2 !important; }
+  .verm{ background:#FA4949 !important; }
+  .c{ text-align:center; } .r{ text-align:right; white-space:nowrap; } .l{ text-align:left; }
+  .b{ font-weight:bold; }
+  .logobox{ text-align:center; vertical-align:middle; }
+  .logobox img{ max-width:150px; max-height:62px; object-fit:contain; }
+  .titulo{ font-size:13px; text-align:center; font-weight:bold; }
+  .rmnum{ font-size:24px; font-weight:bold; text-align:center; font-style:italic; }
+  .mesref{ font-size:12px; font-weight:bold; text-align:center; font-style:italic; }
+  .periodo{ font-size:11px; font-weight:bold; text-align:center; font-style:italic; }
+  .mini{ font-size:7px; color:#222; }
+  .assin{ height:64px; vertical-align:bottom; text-align:center; font-size:8.5px; padding-bottom:3px; }
+  .botao{ margin:8px; padding:8px 16px; background:#1B7BB8; color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:14px; }
+  @media print{ .no-print{ display:none; } body{ margin:0; } }
+  /* larguras aproximadas do modelo */
+  col.ci{width:3.5%}col.cd{width:22%}col.cu{width:3%}col.cq{width:6%}
+  col.cp{width:7%}col.cpt{width:7%}col.cqa{width:6%}col.cva{width:9%}
+  col.cqp{width:6%}col.cvp{width:9%}col.cqac{width:6%}col.cvac{width:9.5%}
+</style></head><body>
+<button class="botao no-print" onclick="window.print()">Imprimir / Salvar como PDF</button>
+<table>
+  <colgroup>
+    <col class="ci"><col class="cd"><col class="cu"><col class="cq"><col class="cp"><col class="cpt">
+    <col class="cqa"><col class="cva"><col class="cqp"><col class="cvp"><col class="cqac"><col class="cvac">
+  </colgroup>
+  <!-- CABECALHO -->
+  <tr>
+    <td class="logobox" rowspan="4" colspan="1">${logoForn?`<img src="${logoForn}">`:'<b class="mini">CONTRATADA</b>'}</td>
+    <td colspan="5" class="azul titulo">RELATÓRIO DE MEDIÇÃO</td>
+    <td colspan="2" class="azul c mini b">RM n&ordm;</td>
+    <td colspan="2" class="c mini">MÊS DE REFERÊNCIA</td>
+    <td class="logobox" rowspan="4" colspan="2"><img src="${LOGO_DATA_URL}"></td>
+  </tr>
+  <tr>
+    <td colspan="5" rowspan="3" class="l" style="vertical-align:top">
+      <div class="mini">CLIENTE:</div><div class="b">CONSTRUTORA AXIAL LTDA</div>
+      <div class="mini" style="margin-top:5px">OBJETO:</div><div class="b">${esc(m.objeto||'')}</div>
+    </td>
+    <td colspan="2" class="rmnum" rowspan="3">${m.rm_numero}</td>
+    <td colspan="2" class="mesref">${mesRef}</td>
+  </tr>
+  <tr><td colspan="2" class="mini c">PERÍODO</td></tr>
+  <tr><td colspan="2" class="periodo">${dataBR(m.periodo_inicio)} a ${dataBR(m.periodo_fim)}</td></tr>
+  <!-- CABECALHO TABELA -->
+  <tr class="cinza b c">
+    <td rowspan="2">ITEM</td><td rowspan="2">DESCRIÇÃO DOS SERVIÇOS</td><td rowspan="2">UN</td>
+    <td rowspan="2">QTD TOTAL</td><td rowspan="2">Preço Unitário (R$)</td><td rowspan="2">Preço Total (R$)</td>
+    <td colspan="2">ANTES MEDIDO</td><td colspan="2">NO PERIODO</td><td colspan="2">ACUMULADO</td>
+  </tr>
+  <tr class="cinza b c">
+    <td>Quant. (UN)</td><td>VALOR (R$)</td><td>Quant. (UN)</td><td>VALOR (R$)</td><td>Quant. (UN)</td><td>VALOR (R$)</td>
+  </tr>
+  <!-- GRUPO 1 -->
+  <tr class="cinza b">
+    <td class="c">1</td><td class="l">SERVIÇOS</td><td></td><td></td><td></td>
+    <td class="r">${brl(valorContrato)}</td>
+    <td></td><td class="r">${brl(totAnterior)}</td>
+    <td></td><td class="r">${brl(totPeriodo)}</td>
+    <td></td><td class="r">${brl(totAcum)}</td>
+  </tr>
+  <tr class="b"><td class="c">1.1</td><td class="l">LOCAÇÃO DE EQUIPAMENTOS</td><td colspan="10"></td></tr>
+  ${linhasHTML}
+  <tr class="b"><td class="c">2</td><td class="l">DESCONTOS</td><td colspan="4"></td>
+    <td class="r">${brl(0)}</td><td></td><td class="r">${brl(desconto)}</td><td></td><td class="r">${brl(desconto)}</td></tr>
+  <!-- TOTAIS -->
+  <tr>
+    <td colspan="2" rowspan="4" class="l" style="vertical-align:top"><span class="mini">OBSERVAÇÕES</span><br>${esc(m.observacoes||'')}</td>
+    <td colspan="2" class="cinza c b">SALDO CONTRATUAL</td>
+    <td colspan="1" class="cinza c b">TOTAL CONTRATADO</td>
+    <td colspan="2" class="cinza c b">TOTAL ANTERIOR</td>
+    <td colspan="2" class="cinza c b mini">TOTAL NO PERÍODO (BRUTO A FATURAR)</td>
+    <td colspan="2" class="cinza c b">TOTAL ACUMULADO</td>
+  </tr>
+  <tr class="b c" style="font-size:10px">
+    <td colspan="2" class="verm">${brl(saldo)}</td>
+    <td colspan="1">${brl(valorContrato)}</td>
+    <td colspan="2">${brl(totAnterior)}</td>
+    <td colspan="2">${brl(totPeriodo)}</td>
+    <td colspan="2">${brl(totAcum)}</td>
+  </tr>
+  <tr class="c">
+    <td colspan="2">${pct(saldo).toFixed(2)}%</td>
+    <td colspan="1">100%</td>
+    <td colspan="2">${pct(totAnterior).toFixed(2)}%</td>
+    <td colspan="2">${pct(totPeriodo).toFixed(2)}%</td>
+    <td colspan="2">${pct(totAcum).toFixed(2)}%</td>
+  </tr>
+  <tr class="b" style="font-size:10px">
+    <td colspan="3" class="r">LÍQUIDO A PAGAR :</td>
+    <td colspan="2" class="c">${brl(totAnterior)}</td>
+    <td colspan="2" class="c">${brl(liquido)}</td>
+    <td colspan="2" class="c">${brl(totAcum)}</td>
+  </tr>
+  <!-- ASSINATURAS -->
+  <tr><td colspan="12" class="cinza c b">MEDIÇÃO E CONTROLE</td></tr>
+  <tr>
+    <td colspan="4" class="assin">SUPERVISOR</td>
+    <td colspan="4" class="assin">CONTRATADA</td>
+    <td colspan="4" class="assin">GERENTE DO CONTRATO</td>
+  </tr>
+</table>
+</body></html>`;
+
+  const w = window.open('', '_blank');
+  w.document.write(html);
+  w.document.close();
 }
 
 </script>
