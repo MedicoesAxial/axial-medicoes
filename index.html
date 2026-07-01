@@ -1001,14 +1001,15 @@ function _totaisMedicao(){
   const totAnterior = servAnterior - descAnterior;
   const totAcum     = servAcum     - descAcum;
   // Valor contratado vem do CONTRATO; se ausente, soma dos preços totais dos serviços
+  const servPrecoTotal = soma(servicos,'preco_total'); // soma da coluna Preço Total dos serviços
   const totalContratado = Number(m.contratos?.valor_contrato||0)
-        || soma(servicos,'preco_total');
+        || servPrecoTotal;
   const liquido = totPeriodo; // líquido a pagar = total no período líquido
   return {
     servPeriodo, servAnterior, servAcum,
     descPeriodo, descAnterior, descAcum,
     totPeriodo, totAnterior, totAcum,
-    totalContratado, saldo: totalContratado-totAcum, liquido
+    servPrecoTotal, totalContratado, saldo: totalContratado-totAcum, liquido
   };
 }
 
@@ -1225,7 +1226,7 @@ function imprimirMedicao(){
   // Grupo 1 - SERVIÇOS (valores BRUTOS de serviço)
   corpo += `<tr class="cinza b">
     <td class="c">1</td><td class="l">SERVIÇOS</td><td></td><td></td><td></td>
-    <td class="r">${brl(t.totalContratado)}</td>
+    <td class="r">${brl(t.servPrecoTotal)}</td>
     <td></td><td class="r">${brl(t.servAnterior)}</td>
     <td></td><td class="r">${brl(t.servPeriodo)}</td>
     <td></td><td class="r">${brl(t.servAcum)}</td>
