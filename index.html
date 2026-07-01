@@ -512,10 +512,9 @@ function desenharMedicao(){
       <td>${bloqueado?'':`<button class="btn btn-perigo btn-sm" onclick="excluirItem('${it.id}')">x</button>`}</td>
     </tr>`).join('');
 
-  const totPeriodo  = ITENS_ATUAIS.reduce((s,i)=>s+Number(i.valor_periodo),0);
-  const totAnterior = ITENS_ATUAIS.reduce((s,i)=>s+Number(i.valor_antes),0);
-  const totAcum     = ITENS_ATUAIS.reduce((s,i)=>s+Number(i.valor_acumulado),0);
-  const liquido = totPeriodo - Number(m.desconto||0) - Number(m.retencao||0);
+  const _t = _totaisMedicao();
+  const totPeriodo = _t.totPeriodo, totAnterior = _t.totAnterior, totAcum = _t.totAcum;
+  const liquido = _t.liquido;
 
   el.innerHTML = `
     <div class="card">
@@ -531,6 +530,10 @@ function desenharMedicao(){
         <div><strong>Centro de custo:</strong><br>${esc(m.obras.centro_custo||'-')}</div>
         <div><strong>Objeto:</strong><br>${esc(m.objeto||'-')}</div>
         <div><strong>Periodo:</strong><br>${dataBR(m.periodo_inicio)} a ${dataBR(m.periodo_fim)}</div>
+        <div style="grid-column:1/-1"><label>Valor do contrato (R$) — usado no Total Contratado / Saldo</label>
+          <input type="number" step="0.01" value="${Number(m.contratos?.valor_contrato||0)}"
+                 onchange="editarValorContrato(this.value)" ${bloqueado?'disabled':''}
+                 style="max-width:260px"></div>
       </div>
       ${bloqueado?'<div class="msg msg-info">Medição finalizada (somente leitura).</div>':''}
 
@@ -550,19 +553,20 @@ function desenharMedicao(){
       </div>
       ${bloqueado?'':'<button class="btn btn-secundario btn-sm" style="margin-top:12px" onclick="adicionarItem()">+ Adicionar item</button>'}
 
-      <div class="grid grid-2" style="margin-top:20px">
-        <div><label>Desconto / Acréscimo (R$)</label>
-          <input type="number" step="0.01" value="${m.desconto}" onchange="editarMedicao('desconto',this.value)" ${bloqueado?'disabled':''}></div>
-        <div><label>Retenções (R$)</label>
-          <input type="number" step="0.01" value="${m.retencao}" onchange="editarMedicao('retencao',this.value)" ${bloqueado?'disabled':''}></div>
+      <div class="msg msg-info" style="margin-top:16px">
+        <strong>Descontos:</strong> lance como itens com código iniciando em <strong>2</strong> (ex.: 2.1, 2.2). Eles abatem do total. Itens 1.x (inclusive avarias/gastos extras) somam.
+      </div>
+      <div class="grid grid-2" style="margin-top:12px">
         <div style="grid-column:1/-1"><label>Observações</label>
           <textarea onchange="editarMedicao('observacoes',this.value)" ${bloqueado?'disabled':''}>${esc(m.observacoes||'')}</textarea></div>
       </div>
 
       <div class="totais">
-        <div class="total-box"><div class="rotulo">Total anterior</div><div class="valor">${brl(totAnterior)}</div></div>
-        <div class="total-box"><div class="rotulo">Total no período (bruto)</div><div class="valor">${brl(totPeriodo)}</div></div>
-        <div class="total-box"><div class="rotulo">Total acumulado</div><div class="valor">${brl(totAcum)}</div></div>
+        <div class="total-box"><div class="rotulo">Serviços (bruto acum.)</div><div class="valor">${brl(_t.servAcum)}</div></div>
+        <div class="total-box"><div class="rotulo">Descontos (acum.)</div><div class="valor">${brl(_t.descAcum)}</div></div>
+        <div class="total-box"><div class="rotulo">Total anterior (líq.)</div><div class="valor">${brl(totAnterior)}</div></div>
+        <div class="total-box"><div class="rotulo">Total no período (líq.)</div><div class="valor">${brl(totPeriodo)}</div></div>
+        <div class="total-box"><div class="rotulo">Total acumulado (líq.)</div><div class="valor">${brl(totAcum)}</div></div>
         <div class="total-box destaque"><div class="rotulo">Líquido a pagar</div><div class="valor">${brl(liquido)}</div></div>
       </div>
 
@@ -608,6 +612,18 @@ async function editarMedicao(campo, valor){
   MEDICAO_ATUAL[campo]=valor;
   registrarHistorico('editou medição', 'medicao', MEDICAO_ATUAL.id, campo);
   if(numericos.includes(campo)) abrirMedicao(MEDICAO_ATUAL.id);
+}
+
+async function editarValorContrato(valor){
+  const v = parseFloat(valor)||0;
+  const cid = MEDICAO_ATUAL.contrato_id;
+  if(!cid){ toast('Medição sem contrato vinculado.','erro'); return; }
+  const { error } = await supabaseClient.from('contratos').update({valor_contrato:v}).eq('id',cid);
+  if(error){ toast(error.message,'erro'); return; }
+  if(MEDICAO_ATUAL.contratos) MEDICAO_ATUAL.contratos.valor_contrato = v;
+  registrarHistorico('editou valor do contrato','contrato',cid,'valor_contrato');
+  toast('Valor do contrato atualizado.','ok');
+  abrirMedicao(MEDICAO_ATUAL.id);
 }
 
 async function finalizarMedicao(){
@@ -957,14 +973,43 @@ async function trocarSenha(){
 // ============================================================
 // Usa MEDICAO_ATUAL e ITENS_ATUAIS (carregados em medicoes.js).
 
+// Um item é DESCONTO quando o código começa com "2" (ex.: 2, 2.1, 2.3).
+// Descontos ABATEM dos totais; serviços (1.x) SOMAM. Igual ao modelo Axial.
+function _ehDesconto(it){
+  const c = String(it.item_codigo||'').trim();
+  return c === '2' || c.startsWith('2.');
+}
+function _particionaItens(){
+  const servicos  = ITENS_ATUAIS.filter(i=>!_ehDesconto(i));
+  const descontos = ITENS_ATUAIS.filter(_ehDesconto);
+  return { servicos, descontos };
+}
 function _totaisMedicao(){
   const m = MEDICAO_ATUAL;
-  const totPeriodo  = ITENS_ATUAIS.reduce((s,i)=>s+Number(i.valor_periodo),0);
-  const totAnterior = ITENS_ATUAIS.reduce((s,i)=>s+Number(i.valor_antes),0);
-  const totAcum     = ITENS_ATUAIS.reduce((s,i)=>s+Number(i.valor_acumulado),0);
-  const totalContratado = ITENS_ATUAIS.reduce((s,i)=>s+Number(i.preco_total),0);
-  const liquido = totPeriodo - Number(m.desconto||0) - Number(m.retencao||0);
-  return { totPeriodo, totAnterior, totAcum, totalContratado, saldo: totalContratado-totAcum, liquido };
+  const { servicos, descontos } = _particionaItens();
+  const soma = (arr,campo)=>arr.reduce((s,i)=>s+Number(i[campo]||0),0);
+  // SERVIÇOS (bruto)
+  const servPeriodo  = soma(servicos,'valor_periodo');
+  const servAnterior = soma(servicos,'valor_antes');
+  const servAcum     = soma(servicos,'valor_acumulado');
+  // DESCONTOS (abatem)
+  const descPeriodo  = soma(descontos,'valor_periodo');
+  const descAnterior = soma(descontos,'valor_antes');
+  const descAcum     = soma(descontos,'valor_acumulado');
+  // Totais líquidos = serviços - descontos (fórmula do modelo)
+  const totPeriodo  = servPeriodo  - descPeriodo;
+  const totAnterior = servAnterior - descAnterior;
+  const totAcum     = servAcum     - descAcum;
+  // Valor contratado vem do CONTRATO; se ausente, soma dos preços totais dos serviços
+  const totalContratado = Number(m.contratos?.valor_contrato||0)
+        || soma(servicos,'preco_total');
+  const liquido = totPeriodo; // líquido a pagar = total no período líquido
+  return {
+    servPeriodo, servAnterior, servAcum,
+    descPeriodo, descAnterior, descAcum,
+    totPeriodo, totAnterior, totAcum,
+    totalContratado, saldo: totalContratado-totAcum, liquido
+  };
 }
 
 function _nomeArquivo(ext){
@@ -1009,9 +1054,8 @@ function exportarExcel(){
   linhas.push(['','','','','','TOTAL ANTERIOR', t.totAnterior]);
   linhas.push(['','','','','','TOTAL NO PERIODO (BRUTO A FATURAR)', t.totPeriodo]);
   linhas.push(['','','','','','TOTAL ACUMULADO', t.totAcum]);
-  linhas.push(['','','','','','DESCONTO / ACRESCIMO', Number(m.desconto||0)]);
-  linhas.push(['','','','','','RETENCOES', Number(m.retencao||0)]);
-  linhas.push(['','','','','','LIQUIDO A PAGAR', t.liquido]);
+  linhas.push(['','','','','','TOTAL DESCONTOS (ACUM.)', t.descAcum]);
+  linhas.push(['','','','','','LIQUIDO A PAGAR (PERIODO)', t.liquido]);
   if(m.observacoes){ linhas.push([]); linhas.push(['OBSERVACOES:', m.observacoes]); }
 
   const ws = XLSX.utils.aoa_to_sheet(linhas);
@@ -1103,8 +1147,8 @@ function exportarPDF(){
     ['Total anterior', brl(t.totAnterior)],
     ['Total no período (bruto)', brl(t.totPeriodo)],
     ['Total acumulado', brl(t.totAcum)],
-    ['Desconto / Acrescimo', brl(m.desconto||0)],
-    ['Retencoes', brl(m.retencao||0)],
+    ['Total descontos (acum.)', brl(t.descAcum)],
+    ['Liquido a pagar', brl(t.liquido)],
   ];
   doc.autoTable({
     body: tot, startY: fy, theme:'plain',
@@ -1140,27 +1184,26 @@ function exportarPDF(){
 function imprimirMedicao(){
   if(!MEDICAO_ATUAL){ toast('Abra uma medição primeiro.','erro'); return; }
   const m = MEDICAO_ATUAL;
-  const itens = ITENS_ATUAIS;
+  const t = _totaisMedicao();
+  const { servicos, descontos } = _particionaItens();
 
-  const totPeriodo  = itens.reduce((s,i)=>s+Number(i.valor_periodo),0);
-  const totAnterior = itens.reduce((s,i)=>s+Number(i.valor_antes),0);
-  const totAcum     = itens.reduce((s,i)=>s+Number(i.valor_acumulado),0);
-  // valor contratado vem do CONTRATO; se ausente, cai para a soma dos precos totais
-  const valorContrato = Number(m.contratos?.valor_contrato || 0)
-        || itens.reduce((s,i)=>s+Number(i.preco_total),0);
-  const desconto = Number(m.desconto||0), retencao = Number(m.retencao||0);
-  const saldo = valorContrato - totAcum;
-  const liquido = totPeriodo - desconto - retencao;
-  const pct = (v)=> valorContrato? (v/valorContrato*100):0;
+  // separa serviços em locação (1.1.x) e gasto extra (1.2.x)
+  const grp = (c)=> String(c||'').trim();
+  const isHeaderRow = (c)=> ['1','1.1','1.2','1.3'].includes(grp(c));
+  const loc   = servicos.filter(i=> grp(i.item_codigo).startsWith('1.1') && !isHeaderRow(i.item_codigo));
+  const extra = servicos.filter(i=> grp(i.item_codigo).startsWith('1.2') && !isHeaderRow(i.item_codigo));
+  const outros= servicos.filter(i=> !grp(i.item_codigo).startsWith('1.1') && !grp(i.item_codigo).startsWith('1.2') && !isHeaderRow(i.item_codigo));
 
+  // logo do fornecedor (base64 no cadastro)
   const logoForn = m.fornecedores?.logo_url || '';
   const mesRef = (()=>{ const d=m.mes_referencia; if(!d) return '';
     const M=['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
     const [a,mm]=d.split('-'); return M[parseInt(mm)-1]+'/'+a; })();
 
-  let linhasHTML='';
-  itens.forEach(it=>{
-    linhasHTML += `<tr>
+  const pct = (v)=> t.totalContratado? (v/t.totalContratado*100):0;
+
+  // monta uma linha de item da tabela
+  const linhaItem = (it)=>`<tr>
       <td class="c">${esc(it.item_codigo||'')}</td>
       <td class="l">${esc(it.descricao||'')}</td>
       <td class="c">${esc(it.unidade||'')}</td>
@@ -1174,7 +1217,32 @@ function imprimirMedicao(){
       <td class="r">${Number(it.qtd_acumulada)?num(it.qtd_acumulada):'-'}</td>
       <td class="r">${brl(it.valor_acumulado)}</td>
     </tr>`;
-  });
+
+  // subtítulo de grupo (1.1 LOCAÇÃO, 1.2 GASTO EXTRA...)
+  const subgrupo = (cod,nome)=>`<tr class="b"><td class="c">${cod}</td><td class="l">${nome}</td><td colspan="10"></td></tr>`;
+
+  let corpo = '';
+  // Grupo 1 - SERVIÇOS (valores BRUTOS de serviço)
+  corpo += `<tr class="cinza b">
+    <td class="c">1</td><td class="l">SERVIÇOS</td><td></td><td></td><td></td>
+    <td class="r">${brl(t.totalContratado)}</td>
+    <td></td><td class="r">${brl(t.servAnterior)}</td>
+    <td></td><td class="r">${brl(t.servPeriodo)}</td>
+    <td></td><td class="r">${brl(t.servAcum)}</td>
+  </tr>`;
+  if(loc.length){ corpo += subgrupo('1.1','LOCAÇÃO DE EQUIPAMENTOS'); corpo += loc.map(linhaItem).join(''); }
+  if(extra.length){ corpo += subgrupo('1.2','GASTO EXTRA'); corpo += extra.map(linhaItem).join(''); }
+  if(outros.length){ corpo += outros.map(linhaItem).join(''); }
+
+  // Grupo 2 - DESCONTOS
+  corpo += `<tr class="cinza b">
+    <td class="c">2</td><td class="l">DESCONTOS</td><td></td><td></td><td></td><td></td>
+    <td></td><td class="r">${brl(t.descAnterior)}</td>
+    <td></td><td class="r">${brl(t.descPeriodo)}</td>
+    <td></td><td class="r">${brl(t.descAcum)}</td>
+  </tr>`;
+  if(descontos.length){ corpo += descontos.map(linhaItem).join(''); }
+  else { corpo += `<tr><td class="c">2.1</td><td class="l" style="color:#888">(sem descontos)</td><td colspan="10"></td></tr>`; }
 
   const html = `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8">
 <title>Medição RM ${m.rm_numero} - ${esc(m.fornecedores?.nome||'')}</title>
@@ -1190,7 +1258,7 @@ function imprimirMedicao(){
   .c{ text-align:center; } .r{ text-align:right; white-space:nowrap; } .l{ text-align:left; }
   .b{ font-weight:bold; }
   .logobox{ text-align:center; vertical-align:middle; }
-  .logobox img{ max-width:150px; max-height:62px; object-fit:contain; }
+  .logobox img{ max-width:150px; max-height:60px; object-fit:contain; }
   .titulo{ font-size:13px; text-align:center; font-weight:bold; }
   .rmnum{ font-size:24px; font-weight:bold; text-align:center; font-style:italic; }
   .mesref{ font-size:12px; font-weight:bold; text-align:center; font-style:italic; }
@@ -1199,7 +1267,6 @@ function imprimirMedicao(){
   .assin{ height:64px; vertical-align:bottom; text-align:center; font-size:8.5px; padding-bottom:3px; }
   .botao{ margin:8px; padding:8px 16px; background:#1B7BB8; color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:14px; }
   @media print{ .no-print{ display:none; } body{ margin:0; } }
-  /* larguras aproximadas do modelo */
   col.ci{width:3.5%}col.cd{width:22%}col.cu{width:3%}col.cq{width:6%}
   col.cp{width:7%}col.cpt{width:7%}col.cqa{width:6%}col.cva{width:9%}
   col.cqp{width:6%}col.cvp{width:9%}col.cqac{width:6%}col.cvac{width:9.5%}
@@ -1210,7 +1277,6 @@ function imprimirMedicao(){
     <col class="ci"><col class="cd"><col class="cu"><col class="cq"><col class="cp"><col class="cpt">
     <col class="cqa"><col class="cva"><col class="cqp"><col class="cvp"><col class="cqac"><col class="cvac">
   </colgroup>
-  <!-- CABECALHO -->
   <tr>
     <td class="logobox" rowspan="4" colspan="1">${logoForn?`<img src="${logoForn}">`:'<b class="mini">CONTRATADA</b>'}</td>
     <td colspan="5" class="azul titulo">RELATÓRIO DE MEDIÇÃO</td>
@@ -1228,7 +1294,6 @@ function imprimirMedicao(){
   </tr>
   <tr><td colspan="2" class="mini c">PERÍODO</td></tr>
   <tr><td colspan="2" class="periodo">${dataBR(m.periodo_inicio)} a ${dataBR(m.periodo_fim)}</td></tr>
-  <!-- CABECALHO TABELA -->
   <tr class="cinza b c">
     <td rowspan="2">ITEM</td><td rowspan="2">DESCRIÇÃO DOS SERVIÇOS</td><td rowspan="2">UN</td>
     <td rowspan="2">QTD TOTAL</td><td rowspan="2">Preço Unitário (R$)</td><td rowspan="2">Preço Total (R$)</td>
@@ -1237,48 +1302,35 @@ function imprimirMedicao(){
   <tr class="cinza b c">
     <td>Quant. (UN)</td><td>VALOR (R$)</td><td>Quant. (UN)</td><td>VALOR (R$)</td><td>Quant. (UN)</td><td>VALOR (R$)</td>
   </tr>
-  <!-- GRUPO 1 -->
-  <tr class="cinza b">
-    <td class="c">1</td><td class="l">SERVIÇOS</td><td></td><td></td><td></td>
-    <td class="r">${brl(valorContrato)}</td>
-    <td></td><td class="r">${brl(totAnterior)}</td>
-    <td></td><td class="r">${brl(totPeriodo)}</td>
-    <td></td><td class="r">${brl(totAcum)}</td>
-  </tr>
-  <tr class="b"><td class="c">1.1</td><td class="l">LOCAÇÃO DE EQUIPAMENTOS</td><td colspan="10"></td></tr>
-  ${linhasHTML}
-  <tr class="b"><td class="c">2</td><td class="l">DESCONTOS</td><td colspan="4"></td>
-    <td class="r">${brl(0)}</td><td></td><td class="r">${brl(desconto)}</td><td></td><td class="r">${brl(desconto)}</td></tr>
-  <!-- TOTAIS -->
+  ${corpo}
   <tr>
     <td colspan="2" rowspan="4" class="l" style="vertical-align:top"><span class="mini">OBSERVAÇÕES</span><br>${esc(m.observacoes||'')}</td>
     <td colspan="2" class="cinza c b">SALDO CONTRATUAL</td>
     <td colspan="1" class="cinza c b">TOTAL CONTRATADO</td>
     <td colspan="2" class="cinza c b">TOTAL ANTERIOR</td>
-    <td colspan="2" class="cinza c b mini">TOTAL NO PERÍODO (BRUTO A FATURAR)</td>
+    <td colspan="2" class="cinza c b mini">TOTAL NO PERÍODO (VALOR BRUTO A FATURAR)</td>
     <td colspan="2" class="cinza c b">TOTAL ACUMULADO</td>
   </tr>
   <tr class="b c" style="font-size:10px">
-    <td colspan="2" class="verm">${brl(saldo)}</td>
-    <td colspan="1">${brl(valorContrato)}</td>
-    <td colspan="2">${brl(totAnterior)}</td>
-    <td colspan="2">${brl(totPeriodo)}</td>
-    <td colspan="2">${brl(totAcum)}</td>
+    <td colspan="2" class="verm">${brl(t.saldo)}</td>
+    <td colspan="1">${brl(t.totalContratado)}</td>
+    <td colspan="2">${brl(t.totAnterior)}</td>
+    <td colspan="2">${brl(t.totPeriodo)}</td>
+    <td colspan="2">${brl(t.totAcum)}</td>
   </tr>
   <tr class="c">
-    <td colspan="2">${pct(saldo).toFixed(2)}%</td>
+    <td colspan="2">${pct(t.saldo).toFixed(2)}%</td>
     <td colspan="1">100%</td>
-    <td colspan="2">${pct(totAnterior).toFixed(2)}%</td>
-    <td colspan="2">${pct(totPeriodo).toFixed(2)}%</td>
-    <td colspan="2">${pct(totAcum).toFixed(2)}%</td>
+    <td colspan="2">${pct(t.totAnterior).toFixed(2)}%</td>
+    <td colspan="2">${pct(t.totPeriodo).toFixed(2)}%</td>
+    <td colspan="2">${pct(t.totAcum).toFixed(2)}%</td>
   </tr>
   <tr class="b" style="font-size:10px">
     <td colspan="3" class="r">LÍQUIDO A PAGAR :</td>
-    <td colspan="2" class="c">${brl(totAnterior)}</td>
-    <td colspan="2" class="c">${brl(liquido)}</td>
-    <td colspan="2" class="c">${brl(totAcum)}</td>
+    <td colspan="2" class="c">${brl(t.totAnterior)}</td>
+    <td colspan="2" class="c">${brl(t.liquido)}</td>
+    <td colspan="2" class="c">${brl(t.totAcum)}</td>
   </tr>
-  <!-- ASSINATURAS -->
   <tr><td colspan="12" class="cinza c b">MEDIÇÃO E CONTROLE</td></tr>
   <tr>
     <td colspan="4" class="assin">SUPERVISOR</td>
