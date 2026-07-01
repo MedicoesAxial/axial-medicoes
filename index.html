@@ -1258,8 +1258,9 @@ function imprimirMedicao(){
   .verm{ background:#FA4949 !important; }
   .c{ text-align:center; } .r{ text-align:right; white-space:nowrap; } .l{ text-align:left; }
   .b{ font-weight:bold; }
-  .logobox{ text-align:center; vertical-align:middle; }
-  .logobox img{ max-width:150px; max-height:60px; object-fit:contain; }
+  .logobox{ text-align:center; vertical-align:middle; overflow:hidden; padding:2px; position:relative; }
+  .logobox img{ max-width:100%; max-height:56px; width:auto; height:auto; object-fit:contain; display:block; margin:0 auto; }
+  .clientebox{ vertical-align:top; background:#fff; position:relative; z-index:2; }
   .titulo{ font-size:13px; text-align:center; font-weight:bold; }
   .rmnum{ font-size:24px; font-weight:bold; text-align:center; font-style:italic; }
   .mesref{ font-size:12px; font-weight:bold; text-align:center; font-style:italic; }
@@ -1268,7 +1269,7 @@ function imprimirMedicao(){
   .assin{ height:64px; vertical-align:bottom; text-align:center; font-size:8.5px; padding-bottom:3px; }
   .botao{ margin:8px; padding:8px 16px; background:#1B7BB8; color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:14px; }
   @media print{ .no-print{ display:none; } body{ margin:0; } }
-  col.ci{width:3.5%}col.cd{width:22%}col.cu{width:3%}col.cq{width:6%}
+  col.ci{width:8%}col.cd{width:17.5%}col.cu{width:3%}col.cq{width:6%}
   col.cp{width:7%}col.cpt{width:7%}col.cqa{width:6%}col.cva{width:9%}
   col.cqp{width:6%}col.cvp{width:9%}col.cqac{width:6%}col.cvac{width:9.5%}
 </style></head><body>
@@ -1286,7 +1287,7 @@ function imprimirMedicao(){
     <td class="logobox" rowspan="4" colspan="2"><img src="${LOGO_DATA_URL}"></td>
   </tr>
   <tr>
-    <td colspan="5" rowspan="3" class="l" style="vertical-align:top">
+    <td colspan="5" rowspan="3" class="l clientebox">
       <div class="mini">CLIENTE:</div><div class="b">CONSTRUTORA AXIAL LTDA</div>
       <div class="mini" style="margin-top:5px">OBJETO:</div><div class="b">${esc(m.objeto||'')}</div>
     </td>
